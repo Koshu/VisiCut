@@ -18,6 +18,8 @@
  **/
 package com.t_oster.visicut.model;
 
+import com.koshu.pathoptimization.kerfCorrection;
+import com.koshu.pathoptimization.kerfCorrection.kerfDir;
 import com.t_oster.liblasercut.LaserJob;
 import com.t_oster.liblasercut.LaserProperty;
 import com.t_oster.liblasercut.VectorPart;
@@ -35,15 +37,18 @@ import com.t_oster.liblasercut.laserscript.ScriptInterpreter;
 import com.t_oster.liblasercut.laserscript.VectorPartScriptInterface;
 import com.t_oster.visicut.managers.PreferencesManager;
 import java.awt.BasicStroke;
+import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.Shape;
 import java.awt.Stroke;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Area;
 import java.awt.geom.NoninvertibleTransformException;
+import java.awt.geom.Path2D;
 import java.awt.geom.PathIterator;
 import java.io.FileReader;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -64,7 +69,6 @@ public class VectorProfile extends LaserProfile
   {
     this.setName("cut");
   }
-
   protected OrderStrategy orderStrategy = OrderStrategy.INNER_FIRST;
 
   /**
@@ -90,8 +94,6 @@ public class VectorProfile extends LaserProfile
   {
     this.orderStrategy = orderStrategy;
   }
-
-
   protected boolean useOutline = false;
 
   /**
@@ -113,7 +115,6 @@ public class VectorProfile extends LaserProfile
   {
     this.useOutline = useOutline;
   }
-
   protected boolean isCut = true;
 
   /**
@@ -157,6 +158,75 @@ public class VectorProfile extends LaserProfile
     this.width = width;
   }
 
+    private kerfDir kerfDirection = kerfDir.OUTSIDE;
+  
+  /**
+   * Set the value of kerfDirection
+   *
+   * @param width new value of kerfDirection
+   */
+  public void setkerfDirection(kerfDir kerfDirection)
+  {
+    this.kerfDirection = kerfDirection;
+  }
+  
+  /**
+   * Get the value of kerfDirection
+   *
+   * @return the value of kerfDirection
+   */
+  public kerfDir getkerfDirection()
+  {
+    return kerfDirection;
+  }
+  
+  
+  private double kerfSize = 0.1;
+  
+  /**
+   * Set the value of kerfSize
+   *
+   * @param width new value of kerfSize
+   */
+  public void setkerfSize(double kerfSize)
+  {
+    this.kerfSize = kerfSize;
+  }
+
+  /**
+   * Get the value of kerfSize
+   *
+   * @return the value of kerfSize
+   */
+  public double getkerfSize()
+  {
+    return kerfSize;
+  }
+  
+  
+  private boolean useKerfCorrection = false;
+
+  /**
+   * Set the value of useKerfCorrection
+   *
+   * @param width new value of useKerfCorrection
+   */
+  public void setuseKerfCorrection(boolean useKerfCorrection)
+  {
+    this.useKerfCorrection = useKerfCorrection;
+  }
+
+  /**
+   * Get the value of useKerfCorrection
+   *
+   * @return the value of useKerfCorrection
+   */
+  public boolean getuseKerfCorrection()
+  {
+    return useKerfCorrection;
+  }
+  
+  
   private GraphicSet calculateOuterShape(GraphicSet objects)
   {
     final Area outerShape = new Area();
@@ -182,75 +252,114 @@ public class VectorProfile extends LaserProfile
   public void renderPreview(Graphics2D gg, GraphicSet objects, MaterialProfile material, AffineTransform mm2px)
   {
     //TODO calculate outline
-    gg.setColor(this.isCut ? material.getCutColor() : material.getEngraveColor());
     Stroke bak = gg.getStroke();
-    Stroke s = new BasicStroke((float) ((mm2px.getScaleX()+mm2px.getScaleY())*this.getWidth()/2), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
+
+    gg.setColor(this.isCut ? material.getCutColor() : material.getEngraveColor());
+    Stroke s = new BasicStroke((float) ((mm2px.getScaleX() + mm2px.getScaleY()) * this.getWidth() / 2), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
     gg.setStroke(s);
+
     if (this.isUseOutline())
     {
       objects = this.calculateOuterShape(objects);
     }
     for (GraphicObject e : objects)
     {
-      try
-      {
-        Shape sh = (e instanceof ShapeObject) ? ((ShapeObject) e).getShape() : e.getBoundingBox();
-        if (objects.getTransform() != null)
-        {
-          sh = objects.getTransform().createTransformedShape(sh);
-        }
-        //all coordinates are assumed to be milimeters, so we transform to desired resolution
-        double factor = Util.dpi2dpmm(this.getDPI());
-        AffineTransform mm2laserPx = AffineTransform.getScaleInstance(factor, factor);
-        sh = mm2laserPx.createTransformedShape(sh);
 
-        AffineTransform laserPx2PreviewPx = mm2laserPx.createInverse();
-        laserPx2PreviewPx.concatenate(mm2px);
-        if (sh == null)
-        {
-          //WTF??
-          System.out.println("Error extracting Shape from: " + ((ShapeObject) e).toString());
-        }
-        else
-        {
-          PathIterator iter = sh.getPathIterator(null, 1);
-          int startx = 0;
-          int starty = 0;
-          int lastx = 0;
-          int lasty = 0;
-          while (!iter.isDone())
-          {
-            double[] test = new double[8];
-            int result = iter.currentSegment(test);
-            //transform coordinates to preview-coordinates
-            laserPx2PreviewPx.transform(test, 0, test, 0, 1);
-            if (result == PathIterator.SEG_MOVETO)
-            {
-              startx = (int) test[0];
-              starty = (int) test[1];
-              lastx = (int) test[0];
-              lasty = (int) test[1];
-            }
-            else if (result == PathIterator.SEG_LINETO)
-            {
-              gg.drawLine(lastx, lasty, (int) test[0], (int) test[1]);
-              lastx = (int) test[0];
-              lasty = (int) test[1];
-            }
-            else if (result == PathIterator.SEG_CLOSE)
-            {
-              gg.drawLine(lastx, lasty, startx, starty);
-            }
-            iter.next();
-          }
-        }
-      }
-      catch (NoninvertibleTransformException ex)
+      Shape sh = (e instanceof ShapeObject) ? ((ShapeObject) e).getShape() : e.getBoundingBox();
+      if (objects.getTransform() != null)
       {
-        Logger.getLogger(VectorProfile.class.getName()).log(Level.SEVERE, null, ex);
+        sh = objects.getTransform().createTransformedShape(sh);
+      }
+
+      renderShape(gg, (ShapeObject) e, sh, mm2px);
+      
+      //KerfCorrection
+      if (useKerfCorrection)
+      {
+        if(kerfDirection == kerfDir.OUTSIDE){
+          gg.setColor(Color.BLUE);
+        } else {
+          gg.setColor(Color.RED);
+        }
+        
+        s = new BasicStroke((float) ((mm2px.getScaleX() + mm2px.getScaleY()) * kerfSize), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
+        gg.setStroke(s);
+        
+        kerfCorrection kC = new kerfCorrection(kerfSize, kerfDirection);
+        Shape sh_corr = kC.calculateCorrectedPath(sh);
+        
+        if(sh_corr != null){
+          renderShape(gg, (ShapeObject) e, sh_corr, mm2px);
+        
+          gg.setColor(Color.BLACK);
+          s = new BasicStroke((float) ((mm2px.getScaleX() + mm2px.getScaleY()) * 0.01), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
+          gg.setStroke(s);
+          renderShape(gg, (ShapeObject) e, sh, mm2px);
+        }
+        
+        gg.setColor(this.isCut ? material.getCutColor() : material.getEngraveColor());
+        s = new BasicStroke((float) ((mm2px.getScaleX() + mm2px.getScaleY()) * this.getWidth() / 2), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
+        gg.setStroke(s);
       }
     }
     gg.setStroke(bak);
+  }
+
+  private void renderShape(Graphics2D gg, ShapeObject e, Shape sh, AffineTransform mm2px)
+  {
+    try
+    {
+      //all coordinates are assumed to be milimeters, so we transform to desired resolution
+      double factor = Util.dpi2dpmm(this.getDPI());
+      AffineTransform mm2laserPx = AffineTransform.getScaleInstance(factor, factor);
+      Shape sh2 = mm2laserPx.createTransformedShape(sh);
+
+      AffineTransform laserPx2PreviewPx = mm2laserPx.createInverse();
+      laserPx2PreviewPx.concatenate(mm2px);
+
+      if (sh2 == null)
+      {
+        //WTF??
+        System.out.println("Error extracting Shape from: " + ((ShapeObject) e).toString());
+      }
+      else
+      {
+        PathIterator iter = sh2.getPathIterator(null, 1);
+        int startx = 0;
+        int starty = 0;
+        int lastx = 0;
+        int lasty = 0;
+        while (!iter.isDone())
+        {
+          double[] test = new double[8];
+          int result = iter.currentSegment(test);
+          //transform coordinates to preview-coordinates
+          laserPx2PreviewPx.transform(test, 0, test, 0, 1);
+          if (result == PathIterator.SEG_MOVETO)
+          {
+            startx = (int) test[0];
+            starty = (int) test[1];
+            lastx = (int) test[0];
+            lasty = (int) test[1];
+          }
+          else if (result == PathIterator.SEG_LINETO)
+          {
+            gg.drawLine(lastx, lasty, (int) test[0], (int) test[1]);
+            lastx = (int) test[0];
+            lasty = (int) test[1];
+          }
+          else if (result == PathIterator.SEG_CLOSE)
+          {
+            gg.drawLine(lastx, lasty, startx, starty);
+          }
+          iter.next();
+        }
+      }
+    }
+    catch (NoninvertibleTransformException ex)
+    {
+      Logger.getLogger(VectorProfile.class.getName()).log(Level.SEVERE, null, ex);
+    }
   }
 
   @Override
@@ -280,7 +389,7 @@ public class VectorProfile extends LaserProfile
           mm2laser.preConcatenate(mm2laserpx);
           try
           {
-            i.execute(new FileReader(((LaserScriptShape) e).getScriptSource()), 
+            i.execute(new FileReader(((LaserScriptShape) e).getScriptSource()),
               new ScriptInterfaceLogUi(new VectorPartScriptInterface(part, mm2laser)),
               !PreferencesManager.getInstance().getPreferences().isDisableSandbox());
           }
@@ -300,6 +409,15 @@ public class VectorProfile extends LaserProfile
           {
             sh = objects.getTransform().createTransformedShape(sh);
           }
+
+          //KerfCorrection
+          if (useKerfCorrection)
+          {
+            kerfCorrection kC = new kerfCorrection(kerfSize, kerfDirection);
+            Shape sh_corr = kC.calculateCorrectedPath(sh);
+            if(sh_corr != null) sh = sh_corr;
+          }
+
           sh = mm2laserpx.createTransformedShape(sh);
           conv.addShape(sh, part);
         }
@@ -327,6 +445,9 @@ public class VectorProfile extends LaserProfile
     cp.thumbnailPath = thumbnailPath;
     cp.width = width;
     cp.useOutline = useOutline;
+    cp.setuseKerfCorrection(this.useKerfCorrection);
+    cp.setkerfSize(this.kerfSize);
+    cp.setkerfDirection(this.kerfDirection);
     cp.setDPI(getDPI());
     return cp;
   }
@@ -334,7 +455,7 @@ public class VectorProfile extends LaserProfile
   @Override
   public int hashCode()
   {
-    return super.hashCodeBase() * 31 + orderStrategy.hashCode()*7 + (useOutline?1:0) + (isCut?3:0) + (int)width;
+    return super.hashCodeBase() * 31 + orderStrategy.hashCode() * 7 + (useOutline ? 1 : 0) + (isCut ? 3 : 0) + (int) width;
   }
 
   @Override
